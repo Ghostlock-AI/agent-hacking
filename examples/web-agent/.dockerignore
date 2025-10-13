@@ -1,0 +1,11 @@
+# Docker build context hygiene for the demo
+.git
+.github
+node_modules
+__pycache__
+*.pyc
+Dockerfile*
+compose.yml
+*.log
+.DS_Store
+

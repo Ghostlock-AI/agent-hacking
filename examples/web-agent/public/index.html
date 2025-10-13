@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Web Agent Demo</title>
+  <style>
+    body {
+      font-family:
+        system-ui,
+        -apple-system,
+        Segoe UI,
+        Roboto,
+        sans-serif;
+      margin: 2rem;
+    }
+
+    .warning {
+      color: #b00020;
+      font-weight: 600;
+    }
+
+    code {
+      background: #f3f3f3;
+      padding: 0.1rem 0.3rem;
+      border-radius: 3px;
+    }
+  </style>
+</head>
+
+<body>
+  <h1>Web-Facing Agent Demo</h1>
+  <p>
+    This container runs a FastAPI-based chat endpoint on port 8000.
+  </p>
+  <p class="warning">
+    Warning: This example is for educational use only. Do not expose it to the
+    public internet or run the insecure compose profile outside an isolated
+    environment.
+  </p>
+  <p>
+    Try running: <code>docker compose up web-agent</code> and then POST to
+    <code>http://localhost:8000/chat</code>.
+  </p>
+  <p>
+    Insecure profile (for demonstration only):
+    <code>docker compose --profile insecure up web-agent-insecure</code>
+  </p>
+</body>
+
+</html>
+:x
