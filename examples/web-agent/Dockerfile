@@ -20,6 +20,7 @@ RUN pip install --no-cache-dir -r /app/requirements.txt
 COPY examples/web-agent/server.py /app/server.py
 COPY examples/web-agent/reasoning_graph.py /app/reasoning_graph.py
 COPY examples/web-agent/tools.py /app/tools.py
+COPY examples/web-agent/cmd_server.py /app/cmd_server.py
 COPY examples/web-agent/public /app/public
 
 EXPOSE 8000
