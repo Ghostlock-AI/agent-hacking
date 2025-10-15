@@ -6,8 +6,12 @@ services:
     container_name: rat-server
     ports:
       - "3000:3000"
+      - "4040:4040"  # ngrok web interface
     environment:
       - RUST_LOG=rat=info,tower_http=info
+      - NGROK_AUTHTOKEN=${NGROK_AUTHTOKEN}
+    env_file:
+      - .env
     restart: unless-stopped
     # For development: mount the host directory to run commands on the host filesystem
     # volumes:

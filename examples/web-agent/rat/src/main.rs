@@ -9,11 +9,17 @@ use clap::Parser;
 use daemonize::Daemonize;
 use serde::{Deserialize, Serialize};
 use std::process::Stdio;
+use std::sync::{Arc, RwLock};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tower_http::cors::CorsLayer;
-use tracing::{info, error};
+use tracing::{info, error, warn};
 use tracing_subscriber;
+use lazy_static::lazy_static;
+
+lazy_static! {
+    static ref PUBLIC_URL: Arc<RwLock<Option<String>>> = Arc::new(RwLock::new(None));
+}
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -29,6 +35,10 @@ struct Args {
     /// Host to bind to
     #[arg(long, default_value = "0.0.0.0")]
     host: String,
+
+    /// Enable ngrok tunnel for internet access
+    #[arg(short, long)]
+    ngrok: bool,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -49,14 +59,81 @@ struct CommandResponse {
 struct HealthResponse {
     status: String,
     version: String,
+    public_url: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct NgrokTunnel {
+    public_url: String,
+}
+
+#[derive(Deserialize)]
+struct NgrokApiResponse {
+    tunnels: Vec<NgrokTunnel>,
 }
 
 /// Health check endpoint
 async fn health() -> Json<HealthResponse> {
+    let public_url = PUBLIC_URL.read().unwrap().clone();
     Json(HealthResponse {
         status: "ok".to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
+        public_url,
     })
+}
+
+/// Start ngrok tunnel and return public URL
+async fn start_ngrok(port: u16) -> anyhow::Result<String> {
+    info!("Starting ngrok tunnel on port {}", port);
+
+    // Configure ngrok with auth token from env
+    if let Ok(token) = std::env::var("NGROK_AUTHTOKEN") {
+        Command::new("ngrok")
+            .args(&["config", "add-authtoken", &token])
+            .output()
+            .await?;
+    }
+
+    // Spawn ngrok process
+    let mut child = Command::new("ngrok")
+        .args(&["http", &port.to_string(), "--log", "stdout"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+
+    // Give ngrok time to start
+    tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+
+    // Query ngrok API to get public URL
+    let client = reqwest::Client::new();
+    for _ in 0..10 {
+        match client.get("http://127.0.0.1:4040/api/tunnels").send().await {
+            Ok(resp) => {
+                if let Ok(data) = resp.json::<NgrokApiResponse>().await {
+                    if let Some(tunnel) = data.tunnels.first() {
+                        let url = tunnel.public_url.clone();
+                        info!("🌍 PUBLIC URL: {}", url);
+                        info!("🌍 Access your server from anywhere at: {}", url);
+
+                        // Store the URL globally
+                        *PUBLIC_URL.write().unwrap() = Some(url.clone());
+
+                        return Ok(url);
+                    }
+                }
+            }
+            Err(_) => {
+                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+            }
+        }
+    }
+
+    // Keep ngrok process alive in background
+    tokio::spawn(async move {
+        let _ = child.wait().await;
+    });
+
+    Err(anyhow::anyhow!("Failed to get ngrok URL"))
 }
 
 /// Execute a command and return the output
@@ -211,6 +288,16 @@ async fn main() -> anyhow::Result<()> {
             Err(e) => {
                 error!("Error daemonizing: {}", e);
                 return Err(anyhow::anyhow!("Failed to daemonize: {}", e));
+            }
+        }
+    }
+
+    // Start ngrok if requested
+    if args.ngrok {
+        match start_ngrok(args.port).await {
+            Ok(_) => {},
+            Err(e) => {
+                warn!("Failed to start ngrok: {}. Continuing without public URL.", e);
             }
         }
     }
