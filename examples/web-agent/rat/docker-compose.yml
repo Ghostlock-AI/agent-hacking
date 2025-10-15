@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  rat:
+    build: .
+    container_name: rat-server
+    ports:
+      - "3000:3000"
+    environment:
+      - RUST_LOG=rat=info,tower_http=info
+    restart: unless-stopped
+    # For development: mount the host directory to run commands on the host filesystem
+    # volumes:
+    #   - /:/host

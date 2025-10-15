@@ -21,6 +21,7 @@ Environment:
 from __future__ import annotations
 
 import asyncio
+import argparse
 import json
 import os
 import pty
@@ -29,6 +30,8 @@ import termios
 import struct
 import shutil
 import signal
+import sys
+import atexit
 from typing import Optional
 
 
@@ -213,8 +216,57 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
+    def parse_args(argv: list[str]) -> argparse.Namespace:
+        ap = argparse.ArgumentParser(description="PTY TCP daemon")
+        ap.add_argument("--daemon", action="store_true", help="Run in background and return immediately")
+        ap.add_argument("--pidfile", help="Write daemon PID to this file (with --daemon)")
+        return ap.parse_args(argv)
+
+    def daemonize(pidfile: Optional[str] = None) -> None:
+        # Double-fork to fully detach.
+        try:
+            pid = os.fork()
+            if pid > 0:
+                # Parent exits
+                os._exit(0)
+        except OSError:
+            sys.exit(1)
+
+        os.setsid()
+        try:
+            pid = os.fork()
+            if pid > 0:
+                os._exit(0)
+        except OSError:
+            sys.exit(1)
+
+        # Redirect stdio to /dev/null
+        sys.stdout.flush()
+        sys.stderr.flush()
+        with open(os.devnull, 'rb', 0) as devnull_in:
+            os.dup2(devnull_in.fileno(), 0)
+        with open(os.devnull, 'ab', 0) as devnull_out:
+            os.dup2(devnull_out.fileno(), 1)
+            os.dup2(devnull_out.fileno(), 2)
+
+        if pidfile:
+            def _cleanup() -> None:
+                try:
+                    os.remove(pidfile)
+                except Exception:
+                    pass
+            try:
+                with open(pidfile, 'w') as fh:
+                    fh.write(str(os.getpid()))
+                atexit.register(_cleanup)
+            except Exception:
+                pass
+
+    args = parse_args(sys.argv[1:])
     try:
+        if args.daemon:
+            daemonize(args.pidfile)
         asyncio.run(main())
     except KeyboardInterrupt:
-        pass
-
+        # Exit code 130 indicates SIGINT-like exit
+        sys.exit(130)

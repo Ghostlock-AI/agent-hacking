@@ -30,23 +30,47 @@ THREAD_ID = os.getenv("THREAD_ID", str(uuid4()))
 
 def stream_once(prompt: str) -> None:
     stop_spin = threading.Event()
+    io_lock = threading.Lock()
+
+    frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+    alt = ["|", "/", "-", "\\"]
+    use = frames
+    try:
+        "⠋".encode("utf-8")
+    except Exception:
+        use = alt
+    BLUE = "\x1b[94m"
+    RESET = "\x1b[0m"
+
+    cur_idx = [0]
+    cur_ch = [use[0]]
+
+    def write(s: str) -> None:
+        sys.stdout.write(s)
+        sys.stdout.flush()
+
+    def draw_spinner_initial() -> None:
+        with io_lock:
+            write(f"{BLUE}{cur_ch[0]}{RESET}")
+
+    def draw_spinner_update() -> None:
+        with io_lock:
+            write("\b" + f"{BLUE}{cur_ch[0]}{RESET}")
+
+    def erase_spinner() -> None:
+        with io_lock:
+            write("\b \b")
 
     def spinner() -> None:
-        frames = ["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"]
-        alt = ["|","/","-","\\"]
-        use = frames
-        try:
-            "⠋".encode("utf-8")
-        except Exception:
-            use = alt
-        BLUE = "\x1b[94m"
-        RESET = "\x1b[0m"
-        for ch in itertools.cycle(use):
-            if stop_spin.is_set():
-                break
-            print(f"\r{BLUE}{ch}{RESET}", end="", file=sys.stderr, flush=True)
+        # Continuously update the spinner character in place
+        while not stop_spin.is_set():
             time.sleep(0.1)
+            cur_idx[0] = (cur_idx[0] + 1) % len(use)
+            cur_ch[0] = use[cur_idx[0]]
+            draw_spinner_update()
 
+    # Start spinner (print initial char so update can replace in place)
+    draw_spinner_initial()
     t = threading.Thread(target=spinner, daemon=True)
     t.start()
 
@@ -59,14 +83,20 @@ def stream_once(prompt: str) -> None:
         ) as r:
             r.raise_for_status()
             for chunk in r.iter_text():
-                if chunk:
-                    print(chunk, end="", flush=True)
-        print()
+                if not chunk:
+                    continue
+                with io_lock:
+                    # Remove spinner at end of line, print chunk, redraw spinner
+                    write("\b \b")
+                    write(chunk)
+                    write(f"{BLUE}{cur_ch[0]}{RESET}")
+        # Stop spinner and clean up
     finally:
         stop_spin.set()
-        # Clear spinner line
-        print("\r" + " " * 40 + "\r", end="", file=sys.stderr, flush=True)
-        t.join(timeout=0.2)
+        t.join(timeout=0.5)
+        # Ensure spinner is removed and end with newline separating from next UI
+        erase_spinner()
+        write("\n")
 
 
 def _max_backtick_run(s: str) -> int:
@@ -208,10 +238,14 @@ def _run_tui() -> None:
             stream_once(line)
         return
 
+    # Enter key behavior: default send-on-enter; can toggle to newline-on-enter.
+    send_on_enter = [True]  # list for mutability in closures
+
     # Build completer (handle prompt_toolkit version differences)
     try:
         completer = NestedCompleter.from_nested_dict({
             "/file": PathCompleter(expanduser=True),
+            "/enter": {"send": None, "newline": None},
             "/quit": None,
         })
     except AttributeError:
@@ -219,11 +253,12 @@ def _run_tui() -> None:
             # Older versions may accept dict in constructor
             completer = NestedCompleter({
                 "/file": PathCompleter(expanduser=True),
+                "/enter": {"send": None, "newline": None},
                 "/quit": None,
             })
         except Exception:
             from prompt_toolkit.completion import WordCompleter
-            completer = WordCompleter(["/file", "/quit"])  # minimal fallback
+            completer = WordCompleter(["/file", "/enter", "/quit"])  # minimal fallback
 
     # Style for the left bar
     style = Style.from_dict({
@@ -237,34 +272,73 @@ def _run_tui() -> None:
     def prompt_continuation(width: int, line_number: int, is_soft_wrap: bool):
         return bar_tokens
 
+    # Try to enable terminal key-reporting protocols so Shift/Alt/Ctrl modified
+    # Enter can be distinguished without user configuration in many terminals
+    # (iTerm2, kitty, xterm). These are no-ops on unsupported terminals.
+    def _term_write(seq: str) -> None:
+        try:
+            sys.stdout.write(seq)
+            sys.stdout.flush()
+        except Exception:
+            pass
+
+    def _enable_modified_keys() -> None:
+        # kitty keyboard protocol (CSI u) and xterm modifyOtherKeys (v2)
+        # If unsupported, terminals ignore silently.
+        _term_write("\x1b[>1u")      # Enable CSI u key reporting
+        _term_write("\x1b[>4;2m")    # Enable modifyOtherKeys level 2
+
+    def _disable_modified_keys() -> None:
+        _term_write("\x1b[>0u")      # Disable CSI u key reporting
+        _term_write("\x1b[>4;0m")    # Disable modifyOtherKeys
+
+    _enable_modified_keys()
+
     # Key bindings
     kb = KeyBindings()
 
-    # Submit on Enter
+    # Enter behavior: depending on mode, submit or insert newline. In newline mode,
+    # double-Enter at end (on an empty line) submits if there is non-whitespace content.
     @kb.add("enter")
     def _(event):
-        event.app.current_buffer.validate_and_handle()
+        buf = event.app.current_buffer
+        doc = buf.document
+        if send_on_enter[0]:
+            # Ignore submission on blank input; keep the prompt active
+            if doc.text.strip() == "":
+                return
+            buf.validate_and_handle()
+        else:
+            at_end = doc.cursor_position == len(doc.text)
+            blank_line = doc.current_line.strip() == ""
+            has_content = doc.text.strip() != ""
+            if at_end and blank_line and has_content and doc.text.endswith("\n"):
+                buf.validate_and_handle()
+            else:
+                buf.insert_text("\n")
 
     # Newline on Ctrl-J
     @kb.add("c-j")
     def _(event):
         event.current_buffer.insert_text("\n")
 
-    # Best-effort Shift+Enter for newline (may not be supported everywhere)
-    try:
-        @kb.add("s-enter")
-        def _(event):
-            event.current_buffer.insert_text("\n")
-    except Exception:
-        pass
+    # Best-effort Shift+Enter (and variants) for newline. Terminals differ in naming.
+    for key_name in ("s-enter", "s-return"):
+        try:
+            @kb.add(key_name)
+            def _(event):
+                event.current_buffer.insert_text("\n")
+        except Exception:
+            pass
 
-    # Optional Alt+Enter newline fallback
-    try:
-        @kb.add("a-enter")
-        def _(event):
-            event.current_buffer.insert_text("\n")
-    except Exception:
-        pass
+    # Optional Alt+Enter and Ctrl+Enter newline fallbacks
+    for key_name in ("a-enter", "c-enter", "a-return", "c-return"):
+        try:
+            @kb.add(key_name)
+            def _(event):
+                event.current_buffer.insert_text("\n")
+        except Exception:
+            pass
 
     # Submit on Ctrl-S (handy on some keyboards)
     @kb.add("c-s")
@@ -278,7 +352,8 @@ def _run_tui() -> None:
 
     @kb.add("c-c")
     def _(event):
-        event.app.exit(exception=EOFError)
+        # Raise KeyboardInterrupt to terminate the program
+        event.app.exit(exception=KeyboardInterrupt)
 
     session = PromptSession(style=style, completer=completer)
 
@@ -294,13 +369,29 @@ def _run_tui() -> None:
                         complete_while_typing=True,
                         key_bindings=kb,
                     )
-                except (KeyboardInterrupt, EOFError):
+                except EOFError:
                     break
 
             if text is None:
                 break
             if text.strip() in {"/quit", "/exit"}:
                 break
+            # Ignore blank submits entirely (no separators, no request)
+            if text.strip() == "":
+                continue
+            # Local client commands (not sent to server)
+            ts = text.strip()
+            if ts.startswith("/enter"):
+                parts = ts.split(None, 1)
+                if len(parts) == 2:
+                    arg = parts[1].strip().lower()
+                    if arg in {"send", "newline"}:
+                        send_on_enter[0] = (arg == "send")
+                        mode = "send-on-enter" if send_on_enter[0] else "newline-on-enter"
+                        print(f"[client] Enter mode: {mode}")
+                        continue
+                print("[client] Usage: /enter send | /enter newline")
+                continue
 
             # Print a horizontal rule before the response
             width = shutil.get_terminal_size(fallback=(80, 20)).columns
@@ -313,14 +404,25 @@ def _run_tui() -> None:
             width = shutil.get_terminal_size(fallback=(80, 20)).columns
             print("-" * max(20, min(120, width)))
     except KeyboardInterrupt:
-        pass
+        # Propagate to main for a clean process exit code.
+        raise
+    finally:
+        _disable_modified_keys()
 
 
 def main() -> None:
-    if len(sys.argv) > 1:
-        stream_once(" ".join(sys.argv[1:]))
-        return
-    _run_tui()
+    try:
+        if len(sys.argv) > 1:
+            stream_once(" ".join(sys.argv[1:]))
+            return
+        _run_tui()
+    except KeyboardInterrupt:
+        # Exit with code 130 to indicate SIGINT, no traceback noise.
+        try:
+            import sys as _sys
+            _sys.exit(130)
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":
