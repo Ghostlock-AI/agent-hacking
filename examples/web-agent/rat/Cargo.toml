@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-axum = "0.7"
+axum = { version = "0.7", features = ["ws"] }
 tokio = { version = "1", features = ["full"] }
 tokio-stream = "0.1"
 serde = { version = "1", features = ["derive"] }
@@ -19,3 +19,9 @@ clap = { version = "4", features = ["derive"] }
 async-stream = "0.3"
 reqwest = { version = "0.11", features = ["json"] }
 lazy_static = "1.4"
+axum-extra = { version = "0.9", features = ["typed-header"] }
+tokio-tungstenite = "0.21"
+futures = "0.3"
+uuid = { version = "1", features = ["v4", "serde"] }
+portable-pty = "0.8"
+bytes = "1"

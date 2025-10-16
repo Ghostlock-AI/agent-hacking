@@ -47,4 +47,4 @@ curl -X POST https://nonfluctuating-evelyn-slushiest.ngrok-free.dev/execute \
 {"success":true,"output":"Hello from internet\n","error":null}%
 ```
 
-This proves that you can access the rat on the internet.
+This proves that you can access the rat on the internet and that it can run commands.
