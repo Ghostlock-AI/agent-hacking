@@ -1,5 +1,10 @@
 # container-breaking
 
+For when you can open a shell inside of a remote container
+and want to gain access to the host filesystem.
+
+https://blog.quarkslab.com/why-is-exposing-the-docker-socket-a-really-bad-idea.html?utm_source=chatgpt.com
+
 ### Setup Commands
 
 ```bash
