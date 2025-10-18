@@ -1,0 +1,15 @@
+version: '3.8'
+services:
+  container-escape-easy:
+    build: ./easy
+    container_name: container-escape-easy
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    tty: true
+
+  container-escape-hard:
+    build: ./hard
+    container_name: container-escape-hard
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    tty: true

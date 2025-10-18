@@ -209,3 +209,6 @@ __marimo__/
 # Agents related (codex, claude code)
 **/Agents.md
 **/AGENTS.md
+
+# mac files 
+**/.DS_Store
